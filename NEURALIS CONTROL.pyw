@@ -48,6 +48,9 @@ SMOOTHING_FACTOR = 0.15
 ACTION_DELAY_SECONDS = 0.5
 DRAG_COOLDOWN_SECONDS = 2.0
 TOGGLE_HOLD_SECONDS = 0.5
+
+# Configurações do Dial de Volume
+VOLUME_ROTATION_SENSITIVITY = 0.04  # Radianos necessários para um "tick" de volume
 # =====================================================================================
 
 # --- Variáveis Globais de Estado ---
@@ -94,6 +97,19 @@ def get_finger_state(hand_landmarks, handedness_label):
         else: fingers.append(0)
     return fingers
 
+def calculate_hand_rotation(landmarks):
+    """
+    Calcula a rotação da mão em radianos baseada no ângulo entre o pulso (0)
+    e a base do dedo médio (9). Retorna um valor entre -PI e PI.
+    """
+    wrist = landmarks.landmark[0]
+    middle_mcp = landmarks.landmark[9]
+    
+    dy = middle_mcp.y - wrist.y
+    dx = middle_mcp.x - wrist.x
+    angle = math.atan2(dy, dx)
+    return angle
+
 def display_boot_sequence():
     """Exibe a interface de inicialização estilizada no terminal."""
     print("\nBooting NEURALIS INTERFACE...")
@@ -111,7 +127,8 @@ def display_boot_sequence():
     print("INFO: -> System starting in [INACTIVE] state.")
     print("       -> Perform activation gesture (2 Hands Open) to engage.")
     print("\n[GESTURE GUIDE]")
-    print("  Right Hand Open : Play/Pause Media (Silent)")
+    print("  Left Hand Open  : Play/Pause Media (Silent)")
+    print("  Right Hand Open : Volume Dial Mode (Rotate to adjust)")
     print("  Index+Middle    : Move Cursor")
     print("  Index+Middle+Thumb : Drag Mode")
     print("  Rock Sign       : Click")
@@ -139,6 +156,11 @@ current_gesture, gesture_start_time = "NEUTRAL", 0
 drag_cooldown_end_time = 0
 flash_effect_end_time = 0
 prev_scroll_y = 0
+
+# Variáveis do Dial de Volume
+prev_vol_angle = 0
+vol_accumulator = 0
+is_volume_dial_active = False
 
 screen_width, screen_height = pyautogui.size()
 pyautogui.FAILSAFE = False
@@ -192,15 +214,25 @@ try:
                 if fingers == [0, 1, 1, 0, 0]: raw_detected_gesture = "MOVE"
                 elif fingers == [1, 1, 1, 0, 0]: raw_detected_gesture = "DRAG"
                 elif fingers == [0, 1, 1, 0, 1]: raw_detected_gesture = "CLICK_INTENT"
-                # Mão Aberta e Direita = Media Control
-                elif fingers == [1, 1, 1, 1, 1] and hand_label == "Right":
+                
+                # --- INVERSÃO REALIZADA AQUI ---
+                # Mão Esquerda Aberta = Media Control
+                elif fingers == [1, 1, 1, 1, 1] and hand_label == "Left":
                     raw_detected_gesture = "MEDIA_CONTROL"
+                # Mão Direita Aberta = Volume Dial
+                elif fingers == [1, 1, 1, 1, 1] and hand_label == "Right":
+                    raw_detected_gesture = "VOLUME_DIAL"
 
         # --- GESTURE DEBOUNCING ---
         if raw_detected_gesture != current_gesture:
             if current_gesture == "DRAG":
                 drag_cooldown_end_time = time.time() + DRAG_COOLDOWN_SECONDS
                 if is_mouse_down: pyautogui.mouseUp(); is_mouse_down = False
+            
+            # Reset de variáveis ao sair do gesto de volume
+            if current_gesture == "VOLUME_DIAL":
+                is_volume_dial_active = False
+                vol_accumulator = 0
             
             if raw_detected_gesture == "DRAG" and time.time() < drag_cooldown_end_time:
                 current_gesture = "DRAG_COOLDOWN"
@@ -250,15 +282,46 @@ try:
                 if not is_mouse_down:
                     pyautogui.mouseDown(); is_mouse_down = True
             
-            # MEDIA CONTROL (PLAY/PAUSE) - SEM SOM
+            # MEDIA CONTROL (PLAY/PAUSE)
             elif current_gesture == "MEDIA_CONTROL":
                 elapsed_time = time.time() - gesture_start_time
                 if elapsed_time >= ACTION_DELAY_SECONDS and not action_locked:
                     pyautogui.press('playpause')
                     print("--> Mídia: Play/Pause acionado.")
-                    # if sound_enabled: sound_click.play() # REMOVIDO PARA EVITAR SOM
                     action_locked = True
                     flash_effect_end_time = time.time() + 0.15
+
+            # --- IMPLEMENTAÇÃO DO VOLUME DIAL (MÃO DIREITA) ---
+            elif current_gesture == "VOLUME_DIAL" and all_hands_data:
+                lm = all_hands_data[0]['landmarks']
+                current_angle = calculate_hand_rotation(lm)
+
+                if not is_volume_dial_active:
+                    # Primeiro frame do gesto: define o ponto neutro
+                    prev_vol_angle = current_angle
+                    vol_accumulator = 0
+                    is_volume_dial_active = True
+                else:
+                    # Calcula a diferença angular
+                    delta_angle = current_angle - prev_vol_angle
+                    
+                    # Correção para o salto de PI para -PI (cruzamento do eixo)
+                    if delta_angle > math.pi: delta_angle -= 2 * math.pi
+                    elif delta_angle < -math.pi: delta_angle += 2 * math.pi
+                    
+                    vol_accumulator += delta_angle
+                    
+                    # Verifica se acumulou rotação suficiente para um "tick" de volume
+                    if vol_accumulator > VOLUME_ROTATION_SENSITIVITY:
+                        # Rotação Horária -> Aumentar Volume
+                        pyautogui.press('volumeup')
+                        vol_accumulator = 0 # Reseta acumulador após ação
+                    elif vol_accumulator < -VOLUME_ROTATION_SENSITIVITY:
+                        # Rotação Anti-horária -> Diminuir Volume
+                        pyautogui.press('volumedown')
+                        vol_accumulator = 0 # Reseta acumulador após ação
+                    
+                    prev_vol_angle = current_angle
 
             # SCROLL
             elif current_gesture == "ARCANEDIAL_MODE":
@@ -326,7 +389,30 @@ try:
                         progress = min(elapsed_time / ACTION_DELAY_SECONDS, 1.0)
                         cv2.ellipse(img, (int(wx), int(wy)), (50, 50), 0, 0, 360 * progress, (0, 255, 0), 5)
                         cv2.putText(img, "COMANDO DE MIDIA", (50, 100), cv2.FONT_HERSHEY_PLAIN, 2, (0, 255, 0), 3)
-                
+
+                # VISUAL VOLUME DIAL
+                elif current_gesture == "VOLUME_DIAL" and all_hands_data:
+                    lm = all_hands_data[0]['landmarks']
+                    wx, wy = int(lm.landmark[0].x * W_CAM), int(lm.landmark[0].y * H_CAM)
+                    
+                    # Desenha o Dial
+                    cv2.circle(img, (wx, wy), 60, (255, 165, 0), 2) # Círculo externo laranja
+                    cv2.circle(img, (wx, wy), 5, (255, 165, 0), -1) # Centro
+                    
+                    # Linha indicadora de rotação atual
+                    curr_ang = calculate_hand_rotation(lm)
+                    end_x = int(wx + 60 * math.cos(curr_ang))
+                    end_y = int(wy + 60 * math.sin(curr_ang))
+                    cv2.line(img, (wx, wy), (end_x, end_y), (0, 255, 255), 3)
+                    
+                    cv2.putText(img, "VOLUME DIAL", (wx - 60, wy - 80), cv2.FONT_HERSHEY_PLAIN, 2, (255, 165, 0), 3)
+                    
+                    # Indicador de ação
+                    if vol_accumulator > VOLUME_ROTATION_SENSITIVITY/2:
+                        cv2.putText(img, "+", (wx + 70, wy), cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 0), 2)
+                    elif vol_accumulator < -VOLUME_ROTATION_SENSITIVITY/2:
+                        cv2.putText(img, "-", (wx - 90, wy), cv2.FONT_HERSHEY_DUPLEX, 1, (0, 0, 255), 2)
+
                 if time.time() < flash_effect_end_time:
                     cv2.circle(img, (int(W_CAM/2), int(H_CAM/2)), int(W_CAM), (255, 255, 255), -1)
                     if current_gesture == "MEDIA_CONTROL":
