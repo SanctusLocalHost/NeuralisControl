@@ -24,7 +24,7 @@ import random
 try:
     import pygame
     pygame.mixer.init()
-    # Ajuste os caminhos conforme necessário, mantive os originais do seu código
+    # Ajuste os caminhos conforme necessário
     sound_activate = pygame.mixer.Sound(r"G:\Meu Drive\CONTROLLER\DATA CENTER\SOM\ATIVED_NEURAL_CONTROL.ogg")
     sound_deactivate = pygame.mixer.Sound(r"G:\Meu Drive\CONTROLLER\DATA CENTER\SOM\UNATIVED_NEURAL_CONTROL.ogg")
     sound_click = pygame.mixer.Sound(r"G:\Meu Drive\CONTROLLER\DATA CENTER\SOM\CLICK_NEURAL_CONTROL.ogg")
@@ -32,7 +32,6 @@ try:
 except (ImportError, FileNotFoundError, pygame.error) as e:
     print("\nAVISO: Pygame ou um dos arquivos de som (.ogg) nao foram encontrados.")
     print("O feedback sonoro esta desativado. O programa continuara funcionando normalmente.")
-    # print(f"(Erro detalhado: {e})") # Ocultado para limpeza visual
     sound_enabled = False
 
 # --- Tenta importar bibliotecas específicas para o sistema ---
@@ -83,7 +82,6 @@ def get_finger_state(hand_landmarks, handedness_label):
     tip_ids = [4, 8, 12, 16, 20]
     is_right_hand = handedness_label == 'Right'
     
-    # Lógica do Polegar (depende da mão)
     if is_right_hand:
         if hand_landmarks.landmark[tip_ids[0]].x < hand_landmarks.landmark[tip_ids[0] - 1].x: fingers.append(1)
         else: fingers.append(0)
@@ -91,7 +89,6 @@ def get_finger_state(hand_landmarks, handedness_label):
         if hand_landmarks.landmark[tip_ids[0]].x > hand_landmarks.landmark[tip_ids[0] - 1].x: fingers.append(1)
         else: fingers.append(0)
     
-    # Lógica dos outros 4 dedos
     for id in range(1, 5):
         if hand_landmarks.landmark[tip_ids[id]].y < hand_landmarks.landmark[tip_ids[id] - 2].y: fingers.append(1)
         else: fingers.append(0)
@@ -105,7 +102,7 @@ def display_boot_sequence():
     time.sleep(0.7)
     print("[+] Gesture Recognition Matrix... OK")
     print("[+] Face Detection Module... OK")
-    print("[+] Media Control Protocol... OK") # Atualizado
+    print("[+] Media Control Protocol... OK")
     print("[+] Audio Feedback Module... " + ("OK" if sound_enabled else "DISABLED"))
     time.sleep(0.5)
     print("\n=======================================================")
@@ -114,7 +111,7 @@ def display_boot_sequence():
     print("INFO: -> System starting in [INACTIVE] state.")
     print("       -> Perform activation gesture (2 Hands Open) to engage.")
     print("\n[GESTURE GUIDE]")
-    print("  Right Hand Open : Play/Pause Media")
+    print("  Right Hand Open : Play/Pause Media (Silent)")
     print("  Index+Middle    : Move Cursor")
     print("  Index+Middle+Thumb : Drag Mode")
     print("  Rock Sign       : Click")
@@ -154,7 +151,6 @@ try:
     while program_is_running:
         success, img = cap.read()
         if not success: continue
-        # Espelhamento da imagem para sensação de espelho
         img = cv2.flip(img, 1)
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
@@ -187,7 +183,7 @@ try:
                         if fingers1 == [0, 1, 1, 0, 0] and fingers2 == [0, 1, 1, 0, 0]: raw_detected_gesture = "ZOOM"
                         elif fingers1 == [1, 1, 0, 0, 0] and fingers2 == [1, 1, 0, 0, 0]: raw_detected_gesture = "ARCANEDIAL_MODE"
             
-            # --- LÓGICA DE 1 MÃO (COMANDO DE MÍDIA ADICIONADO AQUI) ---
+            # --- LÓGICA DE 1 MÃO ---
             if is_gesture_control_active and num_hands == 1:
                 fingers = all_hands_data[0]['fingers']
                 hand_label = all_hands_data[0]['label']
@@ -196,17 +192,16 @@ try:
                 if fingers == [0, 1, 1, 0, 0]: raw_detected_gesture = "MOVE"
                 elif fingers == [1, 1, 1, 0, 0]: raw_detected_gesture = "DRAG"
                 elif fingers == [0, 1, 1, 0, 1]: raw_detected_gesture = "CLICK_INTENT"
-                # IMPLEMENTAÇÃO: Mão Aberta e Direita = Media Control
+                # Mão Aberta e Direita = Media Control
                 elif fingers == [1, 1, 1, 1, 1] and hand_label == "Right":
                     raw_detected_gesture = "MEDIA_CONTROL"
 
-        # --- GESTURE DEBOUNCING / MÁQUINA DE ESTADO ---
+        # --- GESTURE DEBOUNCING ---
         if raw_detected_gesture != current_gesture:
             if current_gesture == "DRAG":
                 drag_cooldown_end_time = time.time() + DRAG_COOLDOWN_SECONDS
                 if is_mouse_down: pyautogui.mouseUp(); is_mouse_down = False
             
-            # Evita re-entrar em DRAG durante cooldown
             if raw_detected_gesture == "DRAG" and time.time() < drag_cooldown_end_time:
                 current_gesture = "DRAG_COOLDOWN"
             else:
@@ -219,7 +214,7 @@ try:
         if is_gesture_control_active:
             is_movement_gesture = (current_gesture == "MOVE") or (current_gesture == "DRAG")
             
-            # MOVIMENTO DO MOUSE
+            # MOVIMENTO
             if is_movement_gesture and all_hands_data:
                 lm = all_hands_data[0]['landmarks']
                 ix, iy = lm.landmark[8].x * W_CAM, lm.landmark[8].y * H_CAM
@@ -255,17 +250,17 @@ try:
                 if not is_mouse_down:
                     pyautogui.mouseDown(); is_mouse_down = True
             
-            # MEDIA CONTROL (PLAY/PAUSE) - IMPLEMENTAÇÃO
+            # MEDIA CONTROL (PLAY/PAUSE) - SEM SOM
             elif current_gesture == "MEDIA_CONTROL":
                 elapsed_time = time.time() - gesture_start_time
                 if elapsed_time >= ACTION_DELAY_SECONDS and not action_locked:
-                    pyautogui.press('playpause') # Comando Universal de Mídia
+                    pyautogui.press('playpause')
                     print("--> Mídia: Play/Pause acionado.")
-                    if sound_enabled: sound_click.play()
+                    # if sound_enabled: sound_click.play() # REMOVIDO PARA EVITAR SOM
                     action_locked = True
                     flash_effect_end_time = time.time() + 0.15
 
-            # SCROLLING (ARCANEDIAL)
+            # SCROLL
             elif current_gesture == "ARCANEDIAL_MODE":
                 lm1, lm2 = all_hands_data[0]['landmarks'], all_hands_data[1]['landmarks']
                 cy1, cy2 = lm1.landmark[8].y * H_CAM, lm2.landmark[8].y * H_CAM
@@ -291,7 +286,7 @@ try:
             else:
                 initial_zoom_dist = 0
         
-        # --- ATIVAR/DESATIVAR SISTEMA ---
+        # --- TOGGLE SYSTEM ---
         if current_gesture == "TOGGLE_INTENT":
             elapsed_time = time.time() - gesture_start_time
             if elapsed_time >= TOGGLE_HOLD_SECONDS and not action_locked:
@@ -301,12 +296,11 @@ try:
                     else: sound_deactivate.play()
                 action_locked = True
 
-        # --- RENDERIZAÇÃO VISUAL (HUD) ---
+        # --- RENDERIZAÇÃO VISUAL ---
         if camera_window_visible:
             if is_gesture_control_active:
                 cv2.putText(img, "SISTEMA ATIVO", (20, 50), cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 0), 2)
                 
-                # Feedback visual para cada gesto
                 if current_gesture == "MOVE" and all_hands_data:
                     lm = all_hands_data[0]['landmarks']
                     ix, iy = lm.landmark[8].x * W_CAM, lm.landmark[8].y * H_CAM
@@ -323,14 +317,12 @@ try:
                         cv2.circle(img, (int(wx), int(wy)), charge_radius, (0, 255, 255), 3)
                         cv2.putText(img, "CANALIZANDO...", (50, 100), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 0), 3)
                 
-                # VISUAL DO MEDIA CONTROL
+                # VISUAL MEDIA CONTROL
                 elif current_gesture == "MEDIA_CONTROL" and all_hands_data:
                     elapsed_time = time.time() - gesture_start_time
                     if not action_locked:
                         lm = all_hands_data[0]['landmarks']
-                        wx, wy = lm.landmark[9].x * W_CAM, lm.landmark[9].y * H_CAM # Centro da mão
-                        
-                        # Círculo de carregamento estilo "Loading"
+                        wx, wy = lm.landmark[9].x * W_CAM, lm.landmark[9].y * H_CAM
                         progress = min(elapsed_time / ACTION_DELAY_SECONDS, 1.0)
                         cv2.ellipse(img, (int(wx), int(wy)), (50, 50), 0, 0, 360 * progress, (0, 255, 0), 5)
                         cv2.putText(img, "COMANDO DE MIDIA", (50, 100), cv2.FONT_HERSHEY_PLAIN, 2, (0, 255, 0), 3)
