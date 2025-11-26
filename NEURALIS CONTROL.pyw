@@ -24,6 +24,7 @@ import random
 try:
     import pygame
     pygame.mixer.init()
+    # Ajuste os caminhos conforme necessário, mantive os originais do seu código
     sound_activate = pygame.mixer.Sound(r"G:\Meu Drive\CONTROLLER\DATA CENTER\SOM\ATIVED_NEURAL_CONTROL.ogg")
     sound_deactivate = pygame.mixer.Sound(r"G:\Meu Drive\CONTROLLER\DATA CENTER\SOM\UNATIVED_NEURAL_CONTROL.ogg")
     sound_click = pygame.mixer.Sound(r"G:\Meu Drive\CONTROLLER\DATA CENTER\SOM\CLICK_NEURAL_CONTROL.ogg")
@@ -31,7 +32,7 @@ try:
 except (ImportError, FileNotFoundError, pygame.error) as e:
     print("\nAVISO: Pygame ou um dos arquivos de som (.ogg) nao foram encontrados.")
     print("O feedback sonoro esta desativado. O programa continuara funcionando normalmente.")
-    print(f"(Erro detalhado: {e})")
+    # print(f"(Erro detalhado: {e})") # Ocultado para limpeza visual
     sound_enabled = False
 
 # --- Tenta importar bibliotecas específicas para o sistema ---
@@ -81,12 +82,16 @@ def get_finger_state(hand_landmarks, handedness_label):
     fingers = []
     tip_ids = [4, 8, 12, 16, 20]
     is_right_hand = handedness_label == 'Right'
+    
+    # Lógica do Polegar (depende da mão)
     if is_right_hand:
         if hand_landmarks.landmark[tip_ids[0]].x < hand_landmarks.landmark[tip_ids[0] - 1].x: fingers.append(1)
         else: fingers.append(0)
     else:
         if hand_landmarks.landmark[tip_ids[0]].x > hand_landmarks.landmark[tip_ids[0] - 1].x: fingers.append(1)
         else: fingers.append(0)
+    
+    # Lógica dos outros 4 dedos
     for id in range(1, 5):
         if hand_landmarks.landmark[tip_ids[id]].y < hand_landmarks.landmark[tip_ids[id] - 2].y: fingers.append(1)
         else: fingers.append(0)
@@ -100,13 +105,19 @@ def display_boot_sequence():
     time.sleep(0.7)
     print("[+] Gesture Recognition Matrix... OK")
     print("[+] Face Detection Module... OK")
+    print("[+] Media Control Protocol... OK") # Atualizado
     print("[+] Audio Feedback Module... " + ("OK" if sound_enabled else "DISABLED"))
     time.sleep(0.5)
     print("\n=======================================================")
     print("    NEURALIS - CONTROL [ONLINE]")
     print("-------------------------------------------------------")
     print("INFO: -> System starting in [INACTIVE] state.")
-    print("       -> Perform activation gesture to engage.")
+    print("       -> Perform activation gesture (2 Hands Open) to engage.")
+    print("\n[GESTURE GUIDE]")
+    print("  Right Hand Open : Play/Pause Media")
+    print("  Index+Middle    : Move Cursor")
+    print("  Index+Middle+Thumb : Drag Mode")
+    print("  Rock Sign       : Click")
     print("\n[TERMINAL COMMANDS]")
     print("  'c' + Enter : Toggle Visualizer Window")
     print("  'q' + Enter : Terminate Program")
@@ -143,6 +154,7 @@ try:
     while program_is_running:
         success, img = cap.read()
         if not success: continue
+        # Espelhamento da imagem para sensação de espelho
         img = cv2.flip(img, 1)
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
@@ -153,6 +165,7 @@ try:
         all_hands_data = []
         cx1, cy1, cx2, cy2 = 0, 0, 0, 0
 
+        # --- PROCESSAMENTO DAS MÃOS ---
         if results_hands.multi_hand_landmarks:
             for hand_landmarks, handedness_info in zip(results_hands.multi_hand_landmarks, results_hands.multi_handedness):
                 handedness_label = handedness_info.classification[0].label
@@ -163,6 +176,7 @@ try:
 
             num_hands = len(all_hands_data)
             
+            # --- LÓGICA DE 2 MÃOS ---
             if num_hands == 2:
                 if all_hands_data[0]['label'] != all_hands_data[1]['label']:
                     fingers1 = all_hands_data[0]['fingers']
@@ -173,25 +187,39 @@ try:
                         if fingers1 == [0, 1, 1, 0, 0] and fingers2 == [0, 1, 1, 0, 0]: raw_detected_gesture = "ZOOM"
                         elif fingers1 == [1, 1, 0, 0, 0] and fingers2 == [1, 1, 0, 0, 0]: raw_detected_gesture = "ARCANEDIAL_MODE"
             
+            # --- LÓGICA DE 1 MÃO (COMANDO DE MÍDIA ADICIONADO AQUI) ---
             if is_gesture_control_active and num_hands == 1:
                 fingers = all_hands_data[0]['fingers']
+                hand_label = all_hands_data[0]['label']
+
+                # Prioridade de gestos
                 if fingers == [0, 1, 1, 0, 0]: raw_detected_gesture = "MOVE"
                 elif fingers == [1, 1, 1, 0, 0]: raw_detected_gesture = "DRAG"
                 elif fingers == [0, 1, 1, 0, 1]: raw_detected_gesture = "CLICK_INTENT"
+                # IMPLEMENTAÇÃO: Mão Aberta e Direita = Media Control
+                elif fingers == [1, 1, 1, 1, 1] and hand_label == "Right":
+                    raw_detected_gesture = "MEDIA_CONTROL"
 
+        # --- GESTURE DEBOUNCING / MÁQUINA DE ESTADO ---
         if raw_detected_gesture != current_gesture:
             if current_gesture == "DRAG":
                 drag_cooldown_end_time = time.time() + DRAG_COOLDOWN_SECONDS
                 if is_mouse_down: pyautogui.mouseUp(); is_mouse_down = False
+            
+            # Evita re-entrar em DRAG durante cooldown
             if raw_detected_gesture == "DRAG" and time.time() < drag_cooldown_end_time:
                 current_gesture = "DRAG_COOLDOWN"
             else:
                 current_gesture = raw_detected_gesture
+            
             gesture_start_time = time.time()
             action_locked = False
         
+        # --- EXECUÇÃO DAS AÇÕES ---
         if is_gesture_control_active:
             is_movement_gesture = (current_gesture == "MOVE") or (current_gesture == "DRAG")
+            
+            # MOVIMENTO DO MOUSE
             if is_movement_gesture and all_hands_data:
                 lm = all_hands_data[0]['landmarks']
                 ix, iy = lm.landmark[8].x * W_CAM, lm.landmark[8].y * H_CAM
@@ -213,6 +241,7 @@ try:
             else:
                 is_moving_mode = False
 
+            # CLIQUE
             if current_gesture == "CLICK_INTENT":
                 elapsed_time = time.time() - gesture_start_time
                 if elapsed_time >= ACTION_DELAY_SECONDS and not action_locked:
@@ -220,9 +249,23 @@ try:
                     if sound_enabled: sound_click.play()
                     action_locked = True
                     flash_effect_end_time = time.time() + 0.15
+            
+            # DRAG
             elif current_gesture == "DRAG":
                 if not is_mouse_down:
                     pyautogui.mouseDown(); is_mouse_down = True
+            
+            # MEDIA CONTROL (PLAY/PAUSE) - IMPLEMENTAÇÃO
+            elif current_gesture == "MEDIA_CONTROL":
+                elapsed_time = time.time() - gesture_start_time
+                if elapsed_time >= ACTION_DELAY_SECONDS and not action_locked:
+                    pyautogui.press('playpause') # Comando Universal de Mídia
+                    print("--> Mídia: Play/Pause acionado.")
+                    if sound_enabled: sound_click.play()
+                    action_locked = True
+                    flash_effect_end_time = time.time() + 0.15
+
+            # SCROLLING (ARCANEDIAL)
             elif current_gesture == "ARCANEDIAL_MODE":
                 lm1, lm2 = all_hands_data[0]['landmarks'], all_hands_data[1]['landmarks']
                 cy1, cy2 = lm1.landmark[8].y * H_CAM, lm2.landmark[8].y * H_CAM
@@ -234,6 +277,7 @@ try:
             
             if current_gesture != "ARCANEDIAL_MODE": prev_scroll_y = 0
 
+            # ZOOM
             if current_gesture == "ZOOM":
                 lm1, lm2 = all_hands_data[0]['landmarks'], all_hands_data[1]['landmarks']
                 ix1, iy1, mx1, my1 = lm1.landmark[8].x, lm1.landmark[8].y, lm1.landmark[12].x, lm1.landmark[12].y
@@ -247,6 +291,7 @@ try:
             else:
                 initial_zoom_dist = 0
         
+        # --- ATIVAR/DESATIVAR SISTEMA ---
         if current_gesture == "TOGGLE_INTENT":
             elapsed_time = time.time() - gesture_start_time
             if elapsed_time >= TOGGLE_HOLD_SECONDS and not action_locked:
@@ -256,15 +301,19 @@ try:
                     else: sound_deactivate.play()
                 action_locked = True
 
+        # --- RENDERIZAÇÃO VISUAL (HUD) ---
         if camera_window_visible:
             if is_gesture_control_active:
                 cv2.putText(img, "SISTEMA ATIVO", (20, 50), cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 0), 2)
+                
+                # Feedback visual para cada gesto
                 if current_gesture == "MOVE" and all_hands_data:
                     lm = all_hands_data[0]['landmarks']
                     ix, iy = lm.landmark[8].x * W_CAM, lm.landmark[8].y * H_CAM
                     pulse_radius = 15 + int(10 * abs(math.sin(time.time() * 5)))
                     cv2.circle(img, (int(ix), int(iy)), pulse_radius, (255, 0, 255), 2)
                     cv2.putText(img, "FOCO ARCANO", (50, 100), cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 3)
+                
                 elif current_gesture == "CLICK_INTENT":
                     elapsed_time = time.time() - gesture_start_time
                     if not action_locked and all_hands_data:
@@ -273,19 +322,31 @@ try:
                         wx, wy = lm.landmark[0].x * W_CAM, lm.landmark[0].y * H_CAM
                         cv2.circle(img, (int(wx), int(wy)), charge_radius, (0, 255, 255), 3)
                         cv2.putText(img, "CANALIZANDO...", (50, 100), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 0), 3)
+                
+                # VISUAL DO MEDIA CONTROL
+                elif current_gesture == "MEDIA_CONTROL" and all_hands_data:
+                    elapsed_time = time.time() - gesture_start_time
+                    if not action_locked:
+                        lm = all_hands_data[0]['landmarks']
+                        wx, wy = lm.landmark[9].x * W_CAM, lm.landmark[9].y * H_CAM # Centro da mão
+                        
+                        # Círculo de carregamento estilo "Loading"
+                        progress = min(elapsed_time / ACTION_DELAY_SECONDS, 1.0)
+                        cv2.ellipse(img, (int(wx), int(wy)), (50, 50), 0, 0, 360 * progress, (0, 255, 0), 5)
+                        cv2.putText(img, "COMANDO DE MIDIA", (50, 100), cv2.FONT_HERSHEY_PLAIN, 2, (0, 255, 0), 3)
+                
                 if time.time() < flash_effect_end_time:
                     cv2.circle(img, (int(W_CAM/2), int(H_CAM/2)), int(W_CAM), (255, 255, 255), -1)
-                    cv2.putText(img, "IMPACTO!", (int(W_CAM/2)-100, int(H_CAM/2)), cv2.FONT_HERSHEY_DUPLEX, 2, (0, 0, 0), 3)
+                    if current_gesture == "MEDIA_CONTROL":
+                        cv2.putText(img, "PLAY / PAUSE", (int(W_CAM/2)-150, int(H_CAM/2)), cv2.FONT_HERSHEY_DUPLEX, 2, (0, 0, 0), 3)
+                    else:
+                        cv2.putText(img, "IMPACTO!", (int(W_CAM/2)-100, int(H_CAM/2)), cv2.FONT_HERSHEY_DUPLEX, 2, (0, 0, 0), 3)
                 
-                # --- CORREÇÃO DO ELO ESPECTRAL ---
                 elif current_gesture == "DRAG" and all_hands_data:
                     lm = all_hands_data[0]['landmarks']
-                    # Pega as coordenadas da ponta do polegar (4) e do dedo médio (12)
                     tx, ty = lm.landmark[4].x * W_CAM, lm.landmark[4].y * H_CAM
                     mx, my = lm.landmark[12].x * W_CAM, lm.landmark[12].y * H_CAM
-                    # Calcula o ponto central do gesto para ancorar a linha
                     anchor_x = (tx + mx) / 2
-                    # Desenha a linha a partir do novo ponto de ancoragem
                     cv2.line(img, (int(anchor_x), int(my)), (int(anchor_x), 0), (255, 0, 255), 8)
                     cv2.putText(img, "ELO ESPECTRAL", (50, 100), cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 3)
 
@@ -295,7 +356,7 @@ try:
                         ix1, iy1 = (lm1.landmark[8].x + lm1.landmark[12].x) / 2 * W_CAM, (lm1.landmark[8].y + lm1.landmark[12].y) / 2 * H_CAM
                         ix2, iy2 = (lm2.landmark[8].x + lm2.landmark[12].x) / 2 * W_CAM, (lm2.landmark[8].y + lm2.landmark[12].y) / 2 * H_CAM
                         text, color = "FENDA ESPACIAL", (255, 0, 255)
-                    else: # ARCANEDIAL_MODE
+                    else: 
                         lm1, lm2 = all_hands_data[0]['landmarks'], all_hands_data[1]['landmarks']
                         ix1, iy1 = lm1.landmark[8].x * W_CAM, lm1.landmark[8].y * H_CAM
                         ix2, iy2 = lm2.landmark[8].x * W_CAM, lm2.landmark[8].y * H_CAM
