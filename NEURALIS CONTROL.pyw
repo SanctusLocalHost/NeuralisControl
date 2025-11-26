@@ -1,24 +1,26 @@
 import os
 import sys
-import warnings
-
-# --- SUPRESSÃO DE AVISOS (MÉTODO ROBUSTO) ---
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-stderr_original = sys.stderr
-sys.stderr = open(os.devnull, 'w')
-import mediapipe as mp
-sys.stderr.close()
-sys.stderr = stderr_original
-warnings.filterwarnings('ignore', category=UserWarning, module='google.protobuf')
-
-import cv2
-import numpy as np
 import time
 import platform
 import math
-import pyautogui
 import threading
 import random
+import warnings
+
+# --- CONFIGURAÇÃO DE AMBIENTE ---
+# Define o nível de log do TensorFlow para erro apenas (evita spam no terminal)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+warnings.filterwarnings('ignore')
+
+import cv2
+import numpy as np
+import mediapipe as mp
+import pyautogui
+
+# --- Tenta importar bibliotecas específicas para o sistema ---
+IS_WINDOWS = platform.system() == 'Windows'
+if IS_WINDOWS:
+    import ctypes
 
 # --- Carregamento Robusto de Sons ---
 try:
@@ -29,20 +31,15 @@ try:
     sound_deactivate = pygame.mixer.Sound(r"G:\Meu Drive\CONTROLLER\DATA CENTER\SOM\UNATIVED_NEURAL_CONTROL.ogg")
     sound_click = pygame.mixer.Sound(r"G:\Meu Drive\CONTROLLER\DATA CENTER\SOM\CLICK_NEURAL_CONTROL.ogg")
     sound_enabled = True
-except (ImportError, FileNotFoundError, pygame.error) as e:
-    print("\nAVISO: Pygame ou um dos arquivos de som (.ogg) nao foram encontrados.")
-    print("O feedback sonoro esta desativado. O programa continuara funcionando normalmente.")
+except (ImportError, FileNotFoundError, Exception) as e:
+    print("\nAVISO: Feedback sonoro desativado (Pygame ou arquivos nao encontrados).")
     sound_enabled = False
-
-# --- Tenta importar bibliotecas específicas para o sistema ---
-IS_WINDOWS = platform.system() == 'Windows'
-if IS_WINDOWS:
-    import ctypes
 
 # =====================================================================================
 # --- PARÂMETROS DE CONFIGURAÇÃO ---
 # =====================================================================================
-W_CAM, H_CAM = 1280, 720
+# [OTIMIZAÇÃO] Resolução reduzida para ganho de FPS
+W_CAM, H_CAM = 640, 480 
 SENSITIVITY = 7.5
 SMOOTHING_FACTOR = 0.15
 ACTION_DELAY_SECONDS = 0.5
@@ -50,7 +47,7 @@ DRAG_COOLDOWN_SECONDS = 2.0
 TOGGLE_HOLD_SECONDS = 0.5
 
 # Configurações do Dial de Volume
-VOLUME_ROTATION_SENSITIVITY = 0.04  # Radianos necessários para um "tick" de volume
+VOLUME_ROTATION_SENSITIVITY = 0.04
 # =====================================================================================
 
 # --- Variáveis Globais de Estado ---
@@ -58,6 +55,30 @@ program_is_running = True
 camera_window_visible = False
 lock = threading.Lock()
 is_gesture_control_active = False
+
+# [OTIMIZAÇÃO] Classe de Captura em Thread Separada
+class WebcamStream:
+    def __init__(self, src=0, width=640, height=480):
+        self.stream = cv2.VideoCapture(src)
+        self.stream.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.stream.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        (self.grabbed, self.frame) = self.stream.read()
+        self.stopped = False
+
+    def start(self):
+        threading.Thread(target=self.update, args=(), daemon=True).start()
+        return self
+
+    def update(self):
+        while not self.stopped:
+            (self.grabbed, self.frame) = self.stream.read()
+
+    def read(self):
+        return self.frame
+
+    def stop(self):
+        self.stopped = True
+        self.stream.release()
 
 def user_input_handler():
     global program_is_running, camera_window_visible
@@ -98,26 +119,20 @@ def get_finger_state(hand_landmarks, handedness_label):
     return fingers
 
 def calculate_hand_rotation(landmarks):
-    """
-    Calcula a rotação da mão em radianos baseada no ângulo entre o pulso (0)
-    e a base do dedo médio (9). Retorna um valor entre -PI e PI.
-    """
     wrist = landmarks.landmark[0]
     middle_mcp = landmarks.landmark[9]
-    
     dy = middle_mcp.y - wrist.y
     dx = middle_mcp.x - wrist.x
     angle = math.atan2(dy, dx)
     return angle
 
 def display_boot_sequence():
-    """Exibe a interface de inicialização estilizada no terminal."""
-    print("\nBooting NEURALIS INTERFACE...")
+    print("\nBooting NEURALIS INTERFACE (PERFORMANCE MODE)...")
     time.sleep(0.5)
     print("[*] Loading Neural Link Subsystems...")
     time.sleep(0.7)
     print("[+] Gesture Recognition Matrix... OK")
-    print("[+] Face Detection Module... OK")
+    print("[+] Face Detection Module... REMOVED (Optimization)")
     print("[+] Media Control Protocol... OK")
     print("[+] Audio Feedback Module... " + ("OK" if sound_enabled else "DISABLED"))
     time.sleep(0.5)
@@ -137,16 +152,13 @@ def display_boot_sequence():
     print("  'q' + Enter : Terminate Program")
     print("=======================================================\n")
 
-# --- INICIALIZAÇÃO ---
-cap = cv2.VideoCapture(0)
-cap.set(3, W_CAM)
-cap.set(4, H_CAM)
+# --- INICIALIZAÇÃO OTIMIZADA ---
+# Inicializando Thread de Vídeo
+cap = WebcamStream(src=0, width=W_CAM, height=H_CAM).start()
+
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(model_complexity=0, max_num_hands=2, min_detection_confidence=0.7, min_tracking_confidence=0.7)
 mp_draw = mp.solutions.drawing_utils
-
-mp_face_detection = mp.solutions.face_detection
-face_detection = mp_face_detection.FaceDetection(min_detection_confidence=0.5)
 
 # Variáveis de estado
 prev_hand_x, prev_hand_y, smoothed_delta_x, smoothed_delta_y = 0, 0, 0, 0
@@ -171,13 +183,14 @@ display_boot_sequence()
 
 try:
     while program_is_running:
-        success, img = cap.read()
-        if not success: continue
+        # Leitura não-bloqueante
+        img = cap.read()
+        if img is None: continue
+        
         img = cv2.flip(img, 1)
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
         results_hands = hands.process(img_rgb)
-        results_face = face_detection.process(img_rgb)
 
         raw_detected_gesture = "NEUTRAL"
         all_hands_data = []
@@ -210,16 +223,11 @@ try:
                 fingers = all_hands_data[0]['fingers']
                 hand_label = all_hands_data[0]['label']
 
-                # Prioridade de gestos
                 if fingers == [0, 1, 1, 0, 0]: raw_detected_gesture = "MOVE"
                 elif fingers == [1, 1, 1, 0, 0]: raw_detected_gesture = "DRAG"
                 elif fingers == [0, 1, 1, 0, 1]: raw_detected_gesture = "CLICK_INTENT"
-                
-                # --- INVERSÃO REALIZADA AQUI ---
-                # Mão Esquerda Aberta = Media Control
                 elif fingers == [1, 1, 1, 1, 1] and hand_label == "Left":
                     raw_detected_gesture = "MEDIA_CONTROL"
-                # Mão Direita Aberta = Volume Dial
                 elif fingers == [1, 1, 1, 1, 1] and hand_label == "Right":
                     raw_detected_gesture = "VOLUME_DIAL"
 
@@ -229,7 +237,6 @@ try:
                 drag_cooldown_end_time = time.time() + DRAG_COOLDOWN_SECONDS
                 if is_mouse_down: pyautogui.mouseUp(); is_mouse_down = False
             
-            # Reset de variáveis ao sair do gesto de volume
             if current_gesture == "VOLUME_DIAL":
                 is_volume_dial_active = False
                 vol_accumulator = 0
@@ -291,35 +298,28 @@ try:
                     action_locked = True
                     flash_effect_end_time = time.time() + 0.15
 
-            # --- IMPLEMENTAÇÃO DO VOLUME DIAL (MÃO DIREITA) ---
+            # VOLUME DIAL (MÃO DIREITA)
             elif current_gesture == "VOLUME_DIAL" and all_hands_data:
                 lm = all_hands_data[0]['landmarks']
                 current_angle = calculate_hand_rotation(lm)
 
                 if not is_volume_dial_active:
-                    # Primeiro frame do gesto: define o ponto neutro
                     prev_vol_angle = current_angle
                     vol_accumulator = 0
                     is_volume_dial_active = True
                 else:
-                    # Calcula a diferença angular
                     delta_angle = current_angle - prev_vol_angle
-                    
-                    # Correção para o salto de PI para -PI (cruzamento do eixo)
                     if delta_angle > math.pi: delta_angle -= 2 * math.pi
                     elif delta_angle < -math.pi: delta_angle += 2 * math.pi
                     
                     vol_accumulator += delta_angle
                     
-                    # Verifica se acumulou rotação suficiente para um "tick" de volume
                     if vol_accumulator > VOLUME_ROTATION_SENSITIVITY:
-                        # Rotação Horária -> Aumentar Volume
                         pyautogui.press('volumeup')
-                        vol_accumulator = 0 # Reseta acumulador após ação
+                        vol_accumulator = 0
                     elif vol_accumulator < -VOLUME_ROTATION_SENSITIVITY:
-                        # Rotação Anti-horária -> Diminuir Volume
                         pyautogui.press('volumedown')
-                        vol_accumulator = 0 # Reseta acumulador após ação
+                        vol_accumulator = 0
                     
                     prev_vol_angle = current_angle
 
@@ -380,7 +380,6 @@ try:
                         cv2.circle(img, (int(wx), int(wy)), charge_radius, (0, 255, 255), 3)
                         cv2.putText(img, "CANALIZANDO...", (50, 100), cv2.FONT_HERSHEY_PLAIN, 2, (255, 255, 0), 3)
                 
-                # VISUAL MEDIA CONTROL
                 elif current_gesture == "MEDIA_CONTROL" and all_hands_data:
                     elapsed_time = time.time() - gesture_start_time
                     if not action_locked:
@@ -390,24 +389,16 @@ try:
                         cv2.ellipse(img, (int(wx), int(wy)), (50, 50), 0, 0, 360 * progress, (0, 255, 0), 5)
                         cv2.putText(img, "COMANDO DE MIDIA", (50, 100), cv2.FONT_HERSHEY_PLAIN, 2, (0, 255, 0), 3)
 
-                # VISUAL VOLUME DIAL
                 elif current_gesture == "VOLUME_DIAL" and all_hands_data:
                     lm = all_hands_data[0]['landmarks']
                     wx, wy = int(lm.landmark[0].x * W_CAM), int(lm.landmark[0].y * H_CAM)
-                    
-                    # Desenha o Dial
-                    cv2.circle(img, (wx, wy), 60, (255, 165, 0), 2) # Círculo externo laranja
-                    cv2.circle(img, (wx, wy), 5, (255, 165, 0), -1) # Centro
-                    
-                    # Linha indicadora de rotação atual
+                    cv2.circle(img, (wx, wy), 60, (255, 165, 0), 2)
+                    cv2.circle(img, (wx, wy), 5, (255, 165, 0), -1)
                     curr_ang = calculate_hand_rotation(lm)
                     end_x = int(wx + 60 * math.cos(curr_ang))
                     end_y = int(wy + 60 * math.sin(curr_ang))
                     cv2.line(img, (wx, wy), (end_x, end_y), (0, 255, 255), 3)
-                    
                     cv2.putText(img, "VOLUME DIAL", (wx - 60, wy - 80), cv2.FONT_HERSHEY_PLAIN, 2, (255, 165, 0), 3)
-                    
-                    # Indicador de ação
                     if vol_accumulator > VOLUME_ROTATION_SENSITIVITY/2:
                         cv2.putText(img, "+", (wx + 70, wy), cv2.FONT_HERSHEY_DUPLEX, 1, (0, 255, 0), 2)
                     elif vol_accumulator < -VOLUME_ROTATION_SENSITIVITY/2:
@@ -464,15 +455,6 @@ try:
             p_time = c_time
             cv2.putText(img, f'FPS: {int(fps)}', (W_CAM - 150, 50), cv2.FONT_HERSHEY_PLAIN, 3, (0, 255, 0), 3)
             
-            if results_face.detections:
-                for detection in results_face.detections:
-                    bboxC = detection.location_data.relative_bounding_box
-                    ih, iw, _ = img.shape
-                    x, y, w, h = int(bboxC.xmin * iw), int(bboxC.ymin * ih), \
-                                 int(bboxC.width * iw), int(bboxC.height * ih)
-                    cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                    cv2.putText(img, "Humano", (x, y - 10), cv2.FONT_HERSHEY_PLAIN, 2, (0, 255, 0), 2)
-
             cv2.imshow("Neuralis Interface", img)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 program_is_running = False
@@ -484,5 +466,5 @@ try:
 finally:
     print("Recursos liberados. Programa encerrado.")
     program_is_running = False
-    cap.release()
+    cap.stop()
     cv2.destroyAllWindows()
